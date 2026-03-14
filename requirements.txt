@@ -1,0 +1,5 @@
+laion-clap
+torch
+numpy
+librosa
+soundfile
