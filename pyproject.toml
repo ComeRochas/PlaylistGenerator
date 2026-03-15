@@ -10,6 +10,8 @@ dependencies = [
     "laion-clap>=1.1.7",
     "librosa>=0.11.0",
     "numpy>=1.26.4",
+    "pandas>=2.3.3",
     "soundfile>=0.13.1",
     "torch>=2.10.0",
+    "torchvision>=0.25.0",
 ]
