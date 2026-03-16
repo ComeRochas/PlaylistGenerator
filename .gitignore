@@ -212,3 +212,9 @@ checkpoints/
 Songs/
 data/
 temp/
+report/.latexmkrc
+report/playlist_report.fls
+report/playlist_report.fdb_latexmk
+report/playlist_report.out
+report/playlist_report.aux
+report/playlist_report.toc
