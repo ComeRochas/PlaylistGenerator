@@ -1,15 +1,5 @@
 """
-General-purpose helpers for the Playlist Generator project.
-
-Provides:
-  - CLAP checkpoint downloading and model loading
-  - Audio file discovery
-  - Embedding I/O (save / load .npz)
-  - L2 normalisation
-  - Cosine k-NN search
-  - Symmetric contrastive loss for fine-tuning
-  - MusicCapsDataset for LoRA fine-tuning
-  - LoRA injection into the CLAP text encoder
+utils
 """
 
 from __future__ import annotations
@@ -22,13 +12,9 @@ import numpy as np
 import pandas as pd
 import torch
 import torch.nn.functional as F
+import torchaudio
 from torch.utils.data import Dataset
 import laion_clap
-
-
-# ---------------------------------------------------------------------------
-# Constants
-# ---------------------------------------------------------------------------
 
 AUDIO_EXTS: frozenset[str] = frozenset(
     {".mp3", ".wav", ".flac", ".m4a", ".ogg", ".aac", ".aiff", ".wma"}
@@ -39,11 +25,9 @@ DEFAULT_CHECKPOINT_URL = (
     "music_audioset_epoch_15_esc_90.14.pt"
 )
 DEFAULT_CHECKPOINT_PATH = Path("checkpoints/music_audioset_epoch_15_esc_90.14.pt")
-
-
-# ---------------------------------------------------------------------------
-# CLAP helpers
-# ---------------------------------------------------------------------------
+DEFAULT_SONGS_DIR  = Path("data/fma_small")
+DEFAULT_METADATA_DIR = Path("data/fma_metadata")
+DEFAULT_EMB_PATH  = Path("data/embeddings.npz")
 
 
 def ensure_checkpoint(
@@ -73,10 +57,6 @@ def load_clap_model(
     checkpoint_url: str = DEFAULT_CHECKPOINT_URL,
     device: str | None = None,
 ) -> laion_clap.CLAP_Module:
-    """Load and return a ready-to-use CLAP music model.
-
-    Downloads the checkpoint first if needed.
-    """
     if device is None:
         device = "cuda" if torch.cuda.is_available() else "cpu"
 
@@ -87,13 +67,9 @@ def load_clap_model(
     return model
 
 
-# ---------------------------------------------------------------------------
-# Audio file helpers
-# ---------------------------------------------------------------------------
-
 
 def collect_audio_files(root: Path | str) -> list[Path]:
-    """Return all audio files under *root*, sorted by path."""
+    """Return all audio files sorted by path."""
     root = Path(root)
     if not root.exists():
         raise FileNotFoundError(f"Audio directory does not exist: {root}")
@@ -101,24 +77,11 @@ def collect_audio_files(root: Path | str) -> list[Path]:
     return files
 
 
-# ---------------------------------------------------------------------------
-# Embedding helpers
-# ---------------------------------------------------------------------------
-
-
 def l2_normalize(x: np.ndarray, eps: float = 1e-12) -> np.ndarray:
-    """L2-normalise *x* along the last axis."""
     return x / (np.linalg.norm(x, axis=-1, keepdims=True) + eps)
 
 
 def save_embeddings(path: Path | str, file_list: Sequence[str], embeddings: np.ndarray) -> None:
-    """Persist *file_list* and *embeddings* to a compressed .npz archive.
-
-    Args:
-        path:        Output file path (e.g. ``data/embeddings.npz``).
-        file_list:   Ordered list of audio file paths (strings).
-        embeddings:  2-D float32 array of shape ``(N, D)``.
-    """
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     np.savez_compressed(
@@ -130,13 +93,6 @@ def save_embeddings(path: Path | str, file_list: Sequence[str], embeddings: np.n
 
 
 def load_embeddings(path: Path | str) -> tuple[list[str], np.ndarray]:
-    """Load embeddings saved by :func:`save_embeddings`.
-
-    Returns:
-        A ``(file_list, embeddings)`` tuple where *file_list* is a list of
-        audio path strings and *embeddings* is a float32 array of shape
-        ``(N, D)``.
-    """
     path = Path(path)
     if not path.exists():
         raise FileNotFoundError(f"Embeddings file not found: {path}")
@@ -147,27 +103,13 @@ def load_embeddings(path: Path | str) -> tuple[list[str], np.ndarray]:
     return file_list, embeddings
 
 
-# ---------------------------------------------------------------------------
-# k-NN search
-# ---------------------------------------------------------------------------
-
 
 def knn_search(
     query_emb: np.ndarray,
     corpus_embs: np.ndarray,
     k: int = 20,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Cosine nearest-neighbour search (both inputs must be L2-normalised).
-
-    Args:
-        query_emb:   1-D array of shape ``(D,)`` — the query vector.
-        corpus_embs: 2-D array of shape ``(N, D)`` — the corpus.
-        k:           Number of neighbours to return.
-
-    Returns:
-        ``(indices, scores)`` — arrays of length ``min(k, N)``, sorted by
-        descending cosine similarity.
-    """
+    """Easy brute force knn"""
     scores: np.ndarray = corpus_embs @ query_emb
     k = min(k, len(scores))
     top_idx: np.ndarray = np.argpartition(-scores, k - 1)[:k]
@@ -175,26 +117,11 @@ def knn_search(
     return top_idx, scores[top_idx]
 
 
-# ---------------------------------------------------------------------------
-# Fine-tuning: contrastive loss
-# ---------------------------------------------------------------------------
-
-
 def symmetric_contrastive_loss(
     audio_embs: torch.Tensor,
     text_embs: torch.Tensor,
     logit_scale: torch.Tensor,
 ) -> torch.Tensor:
-    """Symmetric InfoNCE / contrastive loss (as in CLIP / CLAP training).
-
-    Args:
-        audio_embs:  Float tensor of shape ``(N, D)``, L2-normalised.
-        text_embs:   Float tensor of shape ``(N, D)``, L2-normalised.
-        logit_scale: Scalar tensor — learned temperature (applied as ``exp(logit_scale)``).
-
-    Returns:
-        Scalar loss tensor.
-    """
     audio_embs = F.normalize(audio_embs, p=2, dim=-1)
     text_embs = F.normalize(text_embs, p=2, dim=-1)
 
@@ -208,21 +135,8 @@ def symmetric_contrastive_loss(
     return (loss_a + loss_t) / 2
 
 
-# ---------------------------------------------------------------------------
-# Fine-tuning: MusicCaps dataset
-# ---------------------------------------------------------------------------
-
-
 class MusicCapsDataset(Dataset):
-    """PyTorch Dataset for LoRA fine-tuning on MusicCaps.
-
-    Expects:
-    - A pre-computed embeddings file (npz) produced by the fine-tuning
-      notebook's pre-compute step (paths = ytid keys, embeddings = audio vecs).
-    - A captions CSV with at least ``ytid`` and ``caption`` columns.
-
-    ``__getitem__`` returns ``(audio_emb_tensor, caption_str)``.
-    """
+    """PyTorch Dataset"""
 
     def __init__(self, embeddings_path: Path | str, captions_csv: Path | str) -> None:
         embeddings_path = Path(embeddings_path)
@@ -255,11 +169,6 @@ class MusicCapsDataset(Dataset):
         return audio_emb, caption
 
 
-# ---------------------------------------------------------------------------
-# Fine-tuning: LoRA injection
-# ---------------------------------------------------------------------------
-
-
 def eval_audio_text_cosine_similarity(
     model: laion_clap.CLAP_Module,
     dataset: "MusicCapsDataset",
@@ -267,23 +176,7 @@ def eval_audio_text_cosine_similarity(
     device: str = "cpu",
     batch_size: int = 32,
 ) -> float:
-    """Mean cosine similarity between paired audio and text embeddings.
-
-    For each sample, the audio embedding is taken from the pre-computed cache
-    and the text embedding is produced on-the-fly by the (optionally LoRA-adapted)
-    text encoder.  Both are L2-normalised before the dot product, so the result
-    is in [-1, 1] — higher is better.
-
-    Args:
-        model:          A :class:`laion_clap.CLAP_Module` (may have LoRA applied).
-        dataset:        A :class:`MusicCapsDataset` instance.
-        sample_indices: Indices into *dataset* to evaluate.
-        device:         Torch device string.
-        batch_size:     How many samples to process at once.
-
-    Returns:
-        Scalar mean cosine similarity over all *sample_indices*.
-    """
+    """Mean cosine similarity"""
     model.eval()
     all_sims: list[float] = []
 
@@ -311,17 +204,7 @@ def load_clap_model_with_lora(
     checkpoint_url: str = DEFAULT_CHECKPOINT_URL,
     device: str | None = None,
 ) -> laion_clap.CLAP_Module:
-    """Load a CLAP model and apply saved LoRA adapter weights to its text encoder.
-
-    Args:
-        lora_ckpt_dir:   Directory written by ``model.model.text_branch.save_pretrained()``.
-        checkpoint_path: Base CLAP checkpoint (default music model).
-        checkpoint_url:  URL used to download the checkpoint if absent.
-        device:          Torch device string; auto-detected if *None*.
-
-    Returns:
-        A :class:`laion_clap.CLAP_Module` whose text branch carries the LoRA adapters.
-    """
+    """Load a CLAP model and apply LoRA"""
     from peft import PeftModel
 
     model = load_clap_model(checkpoint_path, checkpoint_url, device=device)
@@ -342,6 +225,90 @@ def load_clap_model_with_lora(
     return model
 
 
+class MusicCapsRawDataset(Dataset):
+    """Dataset returning ``(waveform, caption)`` pairs for audio-encoder fine-tuning.
+
+    Audio is resampled to 48 kHz, converted to mono, and padded / trimmed to
+    exactly 10 s so every batch has a uniform shape.
+    """
+
+    TARGET_SR      = 48_000
+    TARGET_SAMPLES = 480_000  # 10 s @ 48 kHz
+
+    def __init__(self, wav_dir: Path | str, captions_csv: Path | str) -> None:
+        wav_dir = Path(wav_dir)
+        captions_df = pd.read_csv(captions_csv)
+
+        self.samples: list[tuple[Path, str]] = []
+        for _, row in captions_df.iterrows():
+            p = wav_dir / f"{row['ytid']}.wav"
+            if p.exists():
+                self.samples.append((p, str(row["caption"])))
+
+        print(f"MusicCapsRawDataset: {len(self.samples)} WAV clips found in {wav_dir}")
+
+    def __len__(self) -> int:
+        return len(self.samples)
+
+    def __getitem__(self, idx: int) -> tuple[torch.Tensor, str]:
+        path, caption = self.samples[idx]
+        waveform, sr = torchaudio.load(str(path))
+
+        if waveform.shape[0] > 1:
+            waveform = waveform.mean(dim=0, keepdim=True)
+        waveform = waveform.squeeze(0)  # (n_samples,)
+
+        if sr != self.TARGET_SR:
+            waveform = torchaudio.functional.resample(waveform, sr, self.TARGET_SR)
+
+        n = waveform.shape[0]
+        if n < self.TARGET_SAMPLES:
+            waveform = F.pad(waveform, (0, self.TARGET_SAMPLES - n))
+        else:
+            waveform = waveform[: self.TARGET_SAMPLES]
+
+        return waveform, caption
+
+
+def unfreeze_audio_encoder(
+    model: laion_clap.CLAP_Module,
+    top_n_stages: int = 1,
+) -> None:
+    """Unfreeze the last *top_n_stages* Swin stages + norm + audio projection heads.
+
+    The text branch (LoRA) is explicitly re-frozen so only audio-side parameters
+    receive gradients.  Call this after :func:`inject_lora_text_encoder` and
+    Phase-1 training.
+    """
+    for p in model.model.text_branch.parameters():
+        p.requires_grad_(False)
+
+    for p in model.model.audio_branch.parameters():
+        p.requires_grad_(False)
+
+    stages = model.model.audio_branch.layers
+    for stage in stages[-top_n_stages:]:
+        for p in stage.parameters():
+            p.requires_grad_(True)
+
+    for p in model.model.audio_branch.norm.parameters():
+        p.requires_grad_(True)
+    for p in model.model.audio_transform.parameters():
+        p.requires_grad_(True)
+    for p in model.model.audio_projection.parameters():
+        p.requires_grad_(True)
+
+    if hasattr(model.model, "logit_scale_a"):
+        model.model.logit_scale_a.requires_grad_(True)
+
+    trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    total     = sum(p.numel() for p in model.parameters())
+    print(
+        f"Audio encoder unfrozen (last {top_n_stages} Swin stage(s) + norm + projection) — "
+        f"trainable: {trainable:,} / {total:,} ({100 * trainable / total:.2f}%)"
+    )
+
+
 def inject_lora_text_encoder(
     model: laion_clap.CLAP_Module,
     r: int = 16,
@@ -349,31 +316,14 @@ def inject_lora_text_encoder(
     lora_dropout: float = 0.1,
     target_modules: list[str] | None = None,
 ) -> None:
-    """Freeze the CLAP audio encoder and inject LoRA into the text encoder.
-
-    Modifies *model* in-place: replaces ``model.model.text_branch`` with a
-    PEFT LoRA model and sets ``requires_grad=False`` on all audio-branch
-    parameters.  Only LoRA adapter weights and ``logit_scale`` remain
-    trainable.
-
-    Args:
-        model:          A loaded :class:`laion_clap.CLAP_Module`.
-        r:              LoRA rank.
-        lora_alpha:     LoRA alpha (scaling factor).
-        lora_dropout:   Dropout applied inside LoRA layers.
-        target_modules: Attention projection names to target.
-                        Defaults to ``["query", "value"]`` (RoBERTa naming).
-    """
     from peft import LoraConfig, get_peft_model
 
     if target_modules is None:
         target_modules = ["query", "value"]
 
-    # Freeze everything first
     for param in model.parameters():
         param.requires_grad_(False)
 
-    # Apply LoRA to the text branch
     lora_config = LoraConfig(
         r=r,
         lora_alpha=lora_alpha,
@@ -383,14 +333,10 @@ def inject_lora_text_encoder(
     )
     model.model.text_branch = get_peft_model(model.model.text_branch, lora_config)
 
-    # Unfreeze text_projection — it maps text_branch output into the shared
-    # embedding space and its pooler weights are randomly initialized in this
-    # checkpoint (marked MISSING in the load report), so it benefits from tuning.
     if hasattr(model.model, "text_projection"):
         for param in model.model.text_projection.parameters():
             param.requires_grad_(True)
 
-    # Keep logit_scale trainable
     if hasattr(model.model, "logit_scale_a"):
         model.model.logit_scale_a.requires_grad_(True)
 

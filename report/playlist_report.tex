@@ -8,11 +8,11 @@
 \usepackage{booktabs}
 \usepackage{array}
 \usepackage{tikz}
-\usetikzlibrary{arrows.meta, positioning, fit, backgrounds}
+\usetikzlibrary{arrows.meta, positioning, fit, backgrounds, shapes.geometric}
 \usepackage{listings}
 \usepackage{xcolor}
 \usepackage{setspace}
-\usepackage{microtype}
+\usepackage[patch=none]{microtype}
 
 \setlength{\parskip}{0.7em}
 \setstretch{1.05}
@@ -287,7 +287,7 @@ Target modules    & \texttt{query}, \texttt{value} \\
 \end{tabular}
 \end{table}
 
-\subsection{CLIP$\to$CLAP Bridge MLP}
+\subsection{\texorpdfstring{CLIP$\to$CLAP}{CLIP-to-CLAP} Bridge MLP}
 
 To support image-conditioned queries, a small MLP (\texttt{BridgeMLP}) is trained to
 project 1024-dimensional CLIP image features into the 512-dimensional CLAP text space.

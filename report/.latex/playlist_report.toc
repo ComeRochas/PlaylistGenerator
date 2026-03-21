@@ -1,0 +1,26 @@
+\babel@toc {english}{}\relax 
+\contentsline {section}{\numberline {1}Introduction}{3}{section.1}%
+\contentsline {section}{\numberline {2}Background}{3}{section.2}%
+\contentsline {subsection}{\numberline {2.1}Contrastive Language–Audio Pre-training (CLAP)}{3}{subsection.2.1}%
+\contentsline {subsection}{\numberline {2.2}CLIP for Vision}{4}{subsection.2.2}%
+\contentsline {subsection}{\numberline {2.3}Parameter-Efficient Fine-tuning with LoRA}{4}{subsection.2.3}%
+\contentsline {section}{\numberline {3}Datasets}{4}{section.3}%
+\contentsline {subsection}{\numberline {3.1}FMA Small}{5}{subsection.3.1}%
+\contentsline {subsection}{\numberline {3.2}MusicCaps}{5}{subsection.3.2}%
+\contentsline {subsection}{\numberline {3.3}MS COCO Captions}{5}{subsection.3.3}%
+\contentsline {section}{\numberline {4}System Architecture and Methods}{5}{section.4}%
+\contentsline {subsection}{\numberline {4.1}Overview}{5}{subsection.4.1}%
+\contentsline {subsection}{\numberline {4.2}Audio Corpus Indexing}{6}{subsection.4.2}%
+\contentsline {subsection}{\numberline {4.3}Text-to-Playlist Retrieval}{6}{subsection.4.3}%
+\contentsline {subsection}{\numberline {4.4}LoRA Fine-tuning on MusicCaps}{6}{subsection.4.4}%
+\contentsline {paragraph}{Adapter configuration.}{7}{paragraph*.1}%
+\contentsline {paragraph}{Training procedure.}{7}{paragraph*.2}%
+\contentsline {subsection}{\numberline {4.5}CLIP$\to $CLAP Bridge MLP}{7}{subsection.4.5}%
+\contentsline {section}{\numberline {5}Experiments and Results}{8}{section.5}%
+\contentsline {subsection}{\numberline {5.1}LoRA Fine-tuning Results}{8}{subsection.5.1}%
+\contentsline {subsection}{\numberline {5.2}Cosine Similarity Before and After Fine-tuning}{8}{subsection.5.2}%
+\contentsline {subsection}{\numberline {5.3}Qualitative Retrieval Results}{9}{subsection.5.3}%
+\contentsline {subsection}{\numberline {5.4}FMA Small Playlist Demo}{9}{subsection.5.4}%
+\contentsline {section}{\numberline {6}Conclusion and Future Work}{10}{section.6}%
+\contentsline {paragraph}{Image-to-playlist generation.}{10}{paragraph*.3}%
+\contentsline {paragraph}{RLHF alignment.}{10}{paragraph*.4}%

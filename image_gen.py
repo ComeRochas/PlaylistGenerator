@@ -37,20 +37,9 @@ def generate_playlist_image(
 ) -> "Image":
     """Generate a playlist cover image from a text prompt.
 
-    The pipeline is loaded lazily and cached across calls so that repeated
-    calls within the same process do not reload the model weights.
-
-    Args:
-        prompt: Free-text description of the music mood / vibe to visualise.
-        output_path: If given, the PNG is saved to this path in addition to
-            being returned.
-        num_steps: Number of diffusion denoising steps (higher = better
-            quality, slower).
-        guidance_scale: Classifier-free guidance scale.
-        device: ``"cuda"`` or ``"cpu"``; auto-detected when *None*.
-
-    Returns:
-        A ``PIL.Image`` of the generated cover art (512 × 512 px).
+    The pipeline is loaded lazily and cached so repeated calls within the same
+    process don't reload the weights.  If *output_path* is given, the image is
+    also saved there as a PNG.
     """
     import torch
 
@@ -59,7 +48,6 @@ def generate_playlist_image(
 
     pipe = _get_pipeline(device)
 
-    # Build a visually descriptive prompt from the user's music prompt
     visual_prompt = (
         f"Album cover art for a music playlist: {prompt}, "
         "vibrant colors, artistic, detailed, professional album artwork, 4k"

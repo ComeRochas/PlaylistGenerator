@@ -3,16 +3,11 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 import numpy as np
 import pandas as pd
 
-if TYPE_CHECKING:
-    pass
-
-# Tracks whose (set, subset) value belongs to each logical FMA split.
-# FMA Medium includes all tracks present in FMA Small.
+# FMA Medium includes all FMA Small tracks; Large includes both.
 _FMA_SUBSETS: dict[str, tuple[str, ...]] = {
     "small":  ("small",),
     "medium": ("small", "medium"),
@@ -24,24 +19,10 @@ def load_fma_genre_map(
     fma_metadata_dir: Path | str,
     fma_size: str = "small",
 ) -> dict[int, str]:
-    """Return a mapping from FMA track-id to top-level genre.
+    """Return ``{track_id: genre_name}`` for the given FMA subset.
 
-    The ``tracks.csv`` shipped with the FMA metadata archive uses a two-level
-    column header.  The columns of interest are ``('set', 'subset')`` (which
-    FMA split the track belongs to) and ``('track', 'genre_top')`` (the single
-    top-level genre label).
-
-    Args:
-        fma_metadata_dir: Directory containing ``tracks.csv``
-            (e.g. ``data/fma_metadata``).
-        fma_size: One of ``'small'``, ``'medium'``, or ``'large'``.
-            FMA Medium includes all FMA Small tracks; FMA Large includes
-            both.
-
-    Returns:
-        ``{track_id: genre_name}`` for tracks that have a non-empty
-        ``genre_top`` value.  Track-ids are plain integers (matching the
-        numeric part of the MP3 filename, e.g. ``000002.mp3`` → ``2``).
+    Reads the multi-level ``tracks.csv`` and filters by ``(set, subset)``.
+    Track-ids are integers matching the MP3 stem (``000002.mp3`` → ``2``).
     """
     fma_size = fma_size.lower()
     if fma_size not in _FMA_SUBSETS:
@@ -64,11 +45,7 @@ def load_fma_genre_map(
 
 
 def _track_id_from_path(path: str | Path) -> int | None:
-    """Extract the integer track-id from an FMA MP3 path.
-
-    FMA stores files as ``<dir>/<zero-padded-6-digit-id>.mp3``, e.g.
-    ``data/fma_small/000/000002.mp3`` → ``2``.
-    """
+    """Extract the integer track-id from an FMA path (``000002.mp3`` → ``2``)."""
     try:
         return int(Path(path).stem)
     except ValueError:
@@ -82,30 +59,15 @@ def compute_genre_text_audio_alignment(
     audio_embs: np.ndarray,
     device: str,
 ) -> dict[str, float]:
-    """For each genre, measure how well CLAP text embeddings align with audio.
+    """Cosine similarity between each genre's text embedding and its mean audio embedding.
 
-    The metric is the cosine similarity between the text embedding of the
-    genre name and the **mean** L2-normalised audio embedding of all tracks
-    belonging to that genre.  Because only the text encoder is updated during
-    LoRA fine-tuning, running this function before and after training reveals
-    whether alignment improved.
+    Since only the text encoder changes during LoRA fine-tuning, comparing this
+    metric before and after training shows per-genre alignment improvement.
 
-    Args:
-        model: A loaded CLAP model (base or LoRA-adapted).
-        genre_map: ``{track_id: genre_name}`` from :func:`load_fma_genre_map`.
-        audio_paths: Ordered list of file paths corresponding to rows of
-            *audio_embs*.
-        audio_embs: Float32 array of shape ``(N, D)``, L2-normalised audio
-            embeddings.
-        device: ``"cuda"`` or ``"cpu"``.
-
-    Returns:
-        ``{genre_name: cosine_similarity}`` for genres with at least one
-        track present in *audio_paths*.
+    Returns ``{genre_name: cosine_similarity}``.
     """
     audio_embs = np.asarray(audio_embs, dtype=np.float32)
 
-    # Map each corpus path to its genre (skip paths without a known id/genre)
     genre_indices: dict[str, list[int]] = {}
     for i, path in enumerate(audio_paths):
         tid = _track_id_from_path(path)
@@ -119,7 +81,6 @@ def compute_genre_text_audio_alignment(
     if not genre_indices:
         return {}
 
-    # Compute a single text embedding per genre name
     genres = sorted(genre_indices.keys())
     text_embs = model.get_text_embedding(genres, use_tensor=False)
     text_embs = np.asarray(text_embs, dtype=np.float32)
@@ -134,7 +95,7 @@ def compute_genre_text_audio_alignment(
         norm = np.linalg.norm(mean_audio)
         if norm < 1e-9:
             continue
-        mean_audio /= norm  # unit vector
+        mean_audio /= norm
         cosine_sim = float(text_embs[g_idx] @ mean_audio)
         results[genre] = cosine_sim
 
@@ -147,23 +108,12 @@ def compute_intra_genre_cosine_similarity(
     audio_embs: np.ndarray,
     max_per_genre: int = 500,
 ) -> dict[str, float]:
-    """Mean pairwise cosine similarity of tracks within the same genre.
+    """Mean pairwise cosine similarity between all tracks of the same genre.
 
-    This is a pure audio-space clustering metric (independent of the text
-    encoder).  A higher value means genre tracks are tightly clustered in the
-    CLAP audio embedding space.
+    Pure audio-space clustering metric, independent of the text encoder.
+    *max_per_genre* caps the sample size to keep the O(n²) cost manageable.
 
-    Args:
-        genre_map: ``{track_id: genre_name}`` from :func:`load_fma_genre_map`.
-        audio_paths: Ordered list of file paths corresponding to rows of
-            *audio_embs*.
-        audio_embs: Float32 array of shape ``(N, D)``, L2-normalised.
-        max_per_genre: Cap on the number of tracks sampled per genre to keep
-            computation tractable (pairwise cost is O(n²)).
-
-    Returns:
-        ``{genre_name: mean_pairwise_cosine_sim}`` for genres with at least
-        two tracks in the corpus.
+    Returns ``{genre_name: mean_pairwise_cosine_sim}``.
     """
     audio_embs = np.asarray(audio_embs, dtype=np.float32)
 
@@ -185,11 +135,9 @@ def compute_intra_genre_cosine_similarity(
         if len(indices) > max_per_genre:
             indices = rng.choice(indices, size=max_per_genre, replace=False).tolist()
         embs = audio_embs[indices]  # (n, D)
-        # Gram matrix: cosine similarities (embeddings already unit-norm)
-        gram = embs @ embs.T  # (n, n)
+        gram = embs @ embs.T        # cosine similarities (embeddings are unit-norm)
         n = len(embs)
-        # Mean of off-diagonal entries
-        mean_sim = (gram.sum() - np.trace(gram)) / (n * (n - 1))
+        mean_sim = (gram.sum() - np.trace(gram)) / (n * (n - 1))  # mean off-diagonal
         results[genre] = float(mean_sim)
 
     return results
