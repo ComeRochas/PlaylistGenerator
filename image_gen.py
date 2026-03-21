@@ -1,5 +1,3 @@
-"""Playlist cover image generation using Stable Diffusion 2.1."""
-
 from __future__ import annotations
 
 from pathlib import Path
@@ -12,7 +10,6 @@ _pipeline = None
 
 
 def _get_pipeline(device: str):
-    """Load and cache the SD 2.1 pipeline (downloaded on first call)."""
     global _pipeline
     if _pipeline is None:
         from diffusers import StableDiffusionPipeline  # type: ignore[import]
@@ -35,12 +32,7 @@ def generate_playlist_image(
     guidance_scale: float = 7.5,
     device: str | None = None,
 ) -> "Image":
-    """Generate a playlist cover image from a text prompt.
-
-    The pipeline is loaded lazily and cached so repeated calls within the same
-    process don't reload the weights.  If *output_path* is given, the image is
-    also saved there as a PNG.
-    """
+    """Generate a playlist cover image from a text prompt using Stable Diffusion."""
     import torch
 
     if device is None:

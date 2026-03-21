@@ -1,15 +1,4 @@
-"""Data pipeline: download FMA data and compute / cache CLAP audio embeddings.
-
-This module is the single entry-point for all data-preparation work so that
-notebooks never need to worry about whether the data or embeddings exist:
-
-    audio_paths, audio_embs = data_pipeline.ensure_embeddings()
-
-If ``data/fma_small/`` is missing the audio is downloaded first; if
-``data/embeddings.npz`` is missing (or has gaps) the embeddings are computed
-and saved.  Repeated calls are cheap — all steps are skipped when the data
-are already in place.
-"""
+"""Download FMA data and compute/cache CLAP audio embeddings."""
 
 from __future__ import annotations
 
@@ -22,24 +11,15 @@ import numpy as np
 
 import utils
 
-# ---------------------------------------------------------------------------
-# FMA constants
-# ---------------------------------------------------------------------------
+FMA_SMALL_URL = "https://os.unil.cloud.switch.ch/fma/fma_small.zip"
+FMA_META_URL = "https://os.unil.cloud.switch.ch/fma/fma_metadata.zip"
 
-FMA_SMALL_URL   = "https://os.unil.cloud.switch.ch/fma/fma_small.zip"
-FMA_META_URL    = "https://os.unil.cloud.switch.ch/fma/fma_metadata.zip"
-
-FMA_SMALL_SHA1  = "ade154f733639d52e35e32f5593efe5be76c6d70"
-FMA_META_SHA1   = "f0df49ffe5f2a6008d7dc83c6915b31835dfe733"
+FMA_SMALL_SHA1 = "ade154f733639d52e35e32f5593efe5be76c6d70"
+FMA_META_SHA1 = "f0df49ffe5f2a6008d7dc83c6915b31835dfe733"
 
 FMA_SMALL_TRACK_COUNT = 8_000
 
 FMA_META_FILES = ["tracks.csv", "genres.csv", "features.csv", "echonest.csv"]
-
-
-# ---------------------------------------------------------------------------
-# Download helpers
-# ---------------------------------------------------------------------------
 
 
 def _sha1_file(path: Path, chunk: int = 1 << 20) -> str:
@@ -99,30 +79,20 @@ def _count_mp3s(directory: Path) -> int:
     return sum(1 for _ in directory.rglob("*.mp3"))
 
 
-# ---------------------------------------------------------------------------
-# Public API
-# ---------------------------------------------------------------------------
-
-
 def ensure_fma_data(
     songs_dir: Path | str = utils.DEFAULT_SONGS_DIR,
     metadata_dir: Path | str = utils.DEFAULT_METADATA_DIR,
     temp_dir: Path | str = Path("temp"),
 ) -> None:
-    """Download FMA Small audio and metadata if not already on disk.
-
-    Both archives are SHA-1 verified; partial downloads are detected and
-    re-fetched.  Zip files are deleted after successful extraction.
-    """
-    songs_dir    = Path(songs_dir)
+    """Download FMA Small audio and metadata if not already on disk."""
+    songs_dir = Path(songs_dir)
     metadata_dir = Path(metadata_dir)
-    temp_dir     = Path(temp_dir)
+    temp_dir = Path(temp_dir)
     temp_dir.mkdir(parents=True, exist_ok=True)
 
     audio_zip = temp_dir / "fma_small.zip"
-    meta_zip  = temp_dir / "fma_metadata.zip"
+    meta_zip = temp_dir / "fma_metadata.zip"
 
-    # ── Audio ─────────────────────────────────────────────────────────────────
     mp3_count = _count_mp3s(songs_dir) if songs_dir.exists() else 0
     print(f"Audio tracks on disk: {mp3_count} / {FMA_SMALL_TRACK_COUNT}")
 
@@ -133,7 +103,6 @@ def ensure_fma_data(
         _extract_zip(audio_zip, songs_dir.parent)
         print(f"Tracks after extraction: {_count_mp3s(songs_dir)}")
 
-    # ── Metadata ──────────────────────────────────────────────────────────────
     meta_present = all((metadata_dir / f).exists() for f in FMA_META_FILES)
 
     if meta_present:
@@ -142,7 +111,6 @@ def ensure_fma_data(
         _ensure_zip(meta_zip, FMA_META_URL, FMA_META_SHA1)
         _extract_zip(meta_zip, metadata_dir.parent)
 
-    # ── Cleanup ───────────────────────────────────────────────────────────────
     for zf in (audio_zip, meta_zip):
         if zf.exists():
             zf.unlink()
@@ -156,19 +124,15 @@ def compute_audio_embeddings(
     checkpoint_path: Path = utils.DEFAULT_CHECKPOINT_PATH,
     checkpoint_url: str = utils.DEFAULT_CHECKPOINT_URL,
 ) -> tuple[list[str], np.ndarray]:
-    """Compute CLAP audio embeddings for all files in *songs_dir*, incrementally.
+    """Compute CLAP audio embeddings for all files in songs_dir, incrementally.
 
-    Tracks already present in *emb_out* are skipped.  Each file is processed
-    individually so a corrupt MP3 only skips itself.  Results are merged and
-    saved back to *emb_out*.
-
-    Returns:
-        ``(audio_paths, audio_embs)`` — the complete merged embedding index.
+    Tracks already present in emb_out are skipped. Each file is processed
+    individually so a corrupt MP3 only skips itself.
     """
     import torch
 
     songs_dir = Path(songs_dir)
-    emb_out   = Path(emb_out)
+    emb_out = Path(emb_out)
     if device is None:
         device = "cuda" if torch.cuda.is_available() else "cpu"
 
@@ -195,8 +159,8 @@ def compute_audio_embeddings(
     model = utils.load_clap_model(checkpoint_path, checkpoint_url, device=device)
 
     new_embs_chunks: list[np.ndarray] = []
-    new_good_paths:  list[str]        = []
-    skipped:         list[str]        = []
+    new_good_paths: list[str] = []
+    skipped: list[str] = []
     total = len(new_files)
 
     for i, path in enumerate(new_files):
@@ -226,11 +190,11 @@ def compute_audio_embeddings(
     print(f"New embeddings shape: {new_embs.shape}")
 
     if known_paths:
-        all_paths: list[str]  = known_paths + new_good_paths
-        all_embs: np.ndarray  = np.vstack([known_embs, new_embs])
+        all_paths = known_paths + new_good_paths
+        all_embs = np.vstack([known_embs, new_embs])
     else:
         all_paths = new_good_paths
-        all_embs  = new_embs
+        all_embs = new_embs
 
     utils.save_embeddings(emb_out, all_paths, all_embs)
     return all_paths, all_embs
@@ -247,17 +211,9 @@ def ensure_embeddings(
 ) -> tuple[list[str], np.ndarray]:
     """Ensure FMA data and embeddings are ready, then return them.
 
-    Runs the full pipeline on first use; every step is skipped on subsequent
-    calls if its output already exists.  Typical usage::
-
-        audio_paths, audio_embs = data_pipeline.ensure_embeddings()
-
-    Set ``download_fma=False`` if you manage the FMA data separately.
-
-    Returns:
-        ``(audio_paths, audio_embs)`` — complete embedding index ready for k-NN.
+    Set download_fma=False if you manage the FMA data separately.
     """
-    emb_path  = Path(emb_path)
+    emb_path = Path(emb_path)
     songs_dir = Path(songs_dir)
 
     if download_fma:

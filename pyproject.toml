@@ -23,4 +23,7 @@ dependencies = [
     "accelerate>=0.33.0",
     "torchaudio>=2.10.0",
     "torchcodec>=0.10.0",
+    "transformers>=4.45.0",
+    "Pillow>=10.0.0",
+    "qwen-vl-utils>=0.0.14",
 ]

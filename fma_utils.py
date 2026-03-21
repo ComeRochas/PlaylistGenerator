@@ -1,5 +1,3 @@
-"""FMA (Free Music Archive) metadata and genre-cluster analysis utilities."""
-
 from __future__ import annotations
 
 from pathlib import Path
@@ -19,11 +17,7 @@ def load_fma_genre_map(
     fma_metadata_dir: Path | str,
     fma_size: str = "small",
 ) -> dict[int, str]:
-    """Return ``{track_id: genre_name}`` for the given FMA subset.
-
-    Reads the multi-level ``tracks.csv`` and filters by ``(set, subset)``.
-    Track-ids are integers matching the MP3 stem (``000002.mp3`` → ``2``).
-    """
+    """Return {track_id: genre_name} for the given FMA subset."""
     fma_size = fma_size.lower()
     if fma_size not in _FMA_SUBSETS:
         raise ValueError(
@@ -45,7 +39,6 @@ def load_fma_genre_map(
 
 
 def _track_id_from_path(path: str | Path) -> int | None:
-    """Extract the integer track-id from an FMA path (``000002.mp3`` → ``2``)."""
     try:
         return int(Path(path).stem)
     except ValueError:
@@ -59,13 +52,7 @@ def compute_genre_text_audio_alignment(
     audio_embs: np.ndarray,
     device: str,
 ) -> dict[str, float]:
-    """Cosine similarity between each genre's text embedding and its mean audio embedding.
-
-    Since only the text encoder changes during LoRA fine-tuning, comparing this
-    metric before and after training shows per-genre alignment improvement.
-
-    Returns ``{genre_name: cosine_similarity}``.
-    """
+    """Cosine similarity between each genre's text embedding and its mean audio embedding."""
     audio_embs = np.asarray(audio_embs, dtype=np.float32)
 
     genre_indices: dict[str, list[int]] = {}
@@ -108,13 +95,7 @@ def compute_intra_genre_cosine_similarity(
     audio_embs: np.ndarray,
     max_per_genre: int = 500,
 ) -> dict[str, float]:
-    """Mean pairwise cosine similarity between all tracks of the same genre.
-
-    Pure audio-space clustering metric, independent of the text encoder.
-    *max_per_genre* caps the sample size to keep the O(n²) cost manageable.
-
-    Returns ``{genre_name: mean_pairwise_cosine_sim}``.
-    """
+    """Mean pairwise cosine similarity between all tracks of the same genre."""
     audio_embs = np.asarray(audio_embs, dtype=np.float32)
 
     genre_indices: dict[str, list[int]] = {}

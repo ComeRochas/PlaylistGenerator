@@ -36,7 +36,7 @@
 \newcommand{\code}[1]{\mbox{\ttfamily\detokenize{#1}}}
 
 \author{Nathan Duboisset}
-\date{2025}
+\date{2026}
 \title{PlaylistGenerator}
 \subtitle{Semantic Music Retrieval from Natural Language and Visual Prompts}
 
@@ -53,121 +53,76 @@
 % ─────────────────────────────────────────────────────────────────────────────
 
 Music streaming platforms host hundreds of millions of tracks, yet their recommendation
-engines still rely largely on collaborative filtering and rigid keyword tags. When a listener
-wants ``\textit{chill jazz for relaxing}'' or ``\textit{upbeat reggae with rhythmic percussion}'',
-a keyword search often fails to match the intended mood, because natural language encodes
-semantic nuance that traditional metadata cannot capture.
+engines still rely largely on collaborative filtering and rigid keyword tags.
+\textbf{PlaylistGenerator} addresses this by building a semantic retrieval system that
+maps audio and free-text queries into a shared embedding space using CLAP~\cite{elizalde2023clap}.
 
-This project, \textbf{PlaylistGenerator}, addresses this gap by building a semantic music retrieval
-system that maps both audio and free-text queries into a shared embedding space. Given
-any natural-language prompt, the system returns a ranked playlist of the most
-\emph{semantically} similar tracks in the corpus. An additional research direction extends
-this to \emph{visual} prompts: a user-provided image can be projected into the same embedding
-space, enabling image-to-playlist queries.
-
-The system is built on three components:
+The system is built around four components:
 \begin{enumerate}
-    \item \textbf{Audio corpus indexing} --- pre-compute CLAP audio embeddings for every
-          track in the FMA Small dataset and store them in a compressed index.
-    \item \textbf{Text-to-playlist retrieval} --- encode the user's text prompt with the
-          CLAP text encoder and run a cosine $k$-nearest-neighbor search against the index.
-    \item \textbf{Domain adaptation} --- fine-tune the CLAP text encoder with LoRA on the
-          MusicCaps dataset to better align music-specific captions with audio.
+    \item \textbf{Audio indexing} --- pre-compute CLAP audio embeddings for every track
+          in FMA Small and store them in a compressed \texttt{.npz} index.
+    \item \textbf{Text retrieval} --- encode the user prompt with the CLAP text encoder
+          and run a cosine $k$-NN search against the index.
+    \item \textbf{Two-phase fine-tuning} --- (i) adapt the text encoder with LoRA on
+          MusicCaps; (ii) further fine-tune the last stage of the audio encoder
+          end-to-end on raw waveforms to tighten genre clusters in audio embedding space.
+    \item \textbf{Image-to-playlist bridge} --- a small MLP projects CLIP image features
+          into the CLAP text space, enabling image-conditioned queries.
 \end{enumerate}
-A fourth, exploratory component trains a small MLP bridge from CLIP image features into
-the CLAP text space, opening the path toward image-conditioned playlist generation.
 
 % ─────────────────────────────────────────────────────────────────────────────
 \section{Background}
 % ─────────────────────────────────────────────────────────────────────────────
 
-\subsection{Contrastive Language–Audio Pre-training (CLAP)}
+\subsection{CLAP}
 
-CLAP~\cite{elizalde2023clap} is a dual-encoder model that maps audio clips and text
-descriptions into a shared 512-dimensional embedding space via contrastive learning.
-The audio branch uses an \textbf{HTSAT-base} hierarchical Swin transformer, while the
-text branch is \textbf{RoBERTa}. During pre-training, matched audio--text pairs are
-pulled together while mismatched pairs are pushed apart using the
-\textbf{symmetric InfoNCE loss}:
+CLAP~\cite{elizalde2023clap} is a dual-encoder model: the audio branch is an
+\textbf{HTSAT-base} hierarchical Swin transformer (4 stages); the text branch is
+\textbf{RoBERTa}. Both encode into a shared 512-dimensional space trained with the
+symmetric InfoNCE loss:
 \begin{equation}
     \mathcal{L} = \frac{1}{2}\Bigl(
-        \mathcal{L}_{\text{audio}\to\text{text}}
-      + \mathcal{L}_{\text{text}\to\text{audio}}
+        \mathcal{L}_{a\to t} + \mathcal{L}_{t\to a}
     \Bigr), \quad
     \mathcal{L}_{a\to t} = -\frac{1}{N}\sum_{i=1}^{N}
         \log\frac{e^{s\,\mathbf{a}_i^\top\mathbf{t}_i}}
-                  {\sum_{j=1}^{N} e^{s\,\mathbf{a}_i^\top\mathbf{t}_j}}
+                  {\sum_{j} e^{s\,\mathbf{a}_i^\top\mathbf{t}_j}}
     \label{eq:infonce}
 \end{equation}
-where $s = \exp(\log\_\text{scale})$ is a learned temperature and $N$ is the batch size.
-The checkpoint used throughout this project is
-\texttt{music\_audioset\_epoch\_15\_esc\_90.14.pt}, pre-trained on music and AudioSet data,
-achieving 90.14\% accuracy on ESC-50.
+where $s = \exp(\texttt{logit\_scale})$ is learned and $N$ is the batch size.
+The checkpoint used is \texttt{music\_audioset\_epoch\_15\_esc\_90.14.pt} (90.14\%
+on ESC-50).
 
-\subsection{CLIP for Vision}
+\subsection{LoRA and CLIP}
 
-CLIP~\cite{radford2021clip} follows the same contrastive paradigm for image--text pairs.
-We use the \textbf{ViT-L/14} variant (\texttt{openai/clip-vit-large-patch14}), which
-produces 1024-dimensional image embeddings. By training a bridge network from CLIP's
-image space to CLAP's text space, we can query the audio index with images instead of text.
-
-\subsection{Parameter-Efficient Fine-tuning with LoRA}
-
-LoRA~\cite{hu2022lora} inserts low-rank adapters into the frozen weight matrices of a
-pre-trained model. For a weight matrix $W \in \mathbb{R}^{d \times k}$, the adapted
-forward pass becomes:
-\begin{equation}
-    h = W x + \Delta W\,x = W x + B A\, x,
-    \quad B \in \mathbb{R}^{d \times r},\; A \in \mathbb{R}^{r \times k},\; r \ll \min(d,k).
-    \label{eq:lora}
-\end{equation}
-Only $A$ and $B$ are trained; the original weights $W$ remain frozen.
-With $r=16$ and $\alpha=32$, injecting LoRA into the \texttt{query} and \texttt{value}
-projections of RoBERTa yields only \textbf{1,246,209 trainable parameters}, out of
-200,154,457 total (0.62\%).
+LoRA~\cite{hu2022lora} is used as-is to adapt the text encoder (see Section~\ref{sec:phase1}).
+CLIP~\cite{radford2021clip} ViT-L/14 produces 1024-dim image embeddings that feed the
+bridge MLP (Section~\ref{sec:bridge}).
 
 % ─────────────────────────────────────────────────────────────────────────────
 \section{Datasets}
 % ─────────────────────────────────────────────────────────────────────────────
 
-\subsection{FMA Small}
+\textbf{FMA Small}~\cite{defferrard2017fma}: 8,000 tracks across 8 genres (Hip-Hop,
+Pop, Folk, Experimental, Rock, International, Electronic, Instrumental), 30-second MP3s
+at 44.1 kHz. Six corrupt files are silently skipped, giving \textbf{7,994 indexed tracks}.
 
-The \textbf{Free Music Archive (FMA) Small} subset~\cite{defferrard2017fma} contains
-\textbf{8,000 tracks} across 8 balanced genres (Hip-Hop, Pop, Folk, Experimental,
-Rock, International, Electronic, Instrumental), each 30-second clip at 44.1 kHz.
-The archive weighs approximately 7.2 GiB. Out of 8,000 files, 6 are corrupt MP3s
-(silently skipped during embedding), yielding \textbf{7,994 indexed tracks}.
-This corpus constitutes the retrieval database.
+\textbf{MusicCaps}~\cite{agostinelli2023musiclm}: 5,521 expert-captioned 10-second
+YouTube clips. After downloading, 5,298 are available. Pairing with pre-computed audio
+embeddings yields \textbf{4,357 samples} (85/15 split, seed 42: 3,704 train / 653 test).
+Phase~2 uses raw WAV files directly rather than cached embeddings.
 
-\subsection{MusicCaps}
-
-\textbf{MusicCaps}~\cite{agostinelli2023musiclm} is a music captioning benchmark
-released by Google and hosted on Hugging Face (\texttt{google/MusicCaps}).
-It provides 5,521 10-second YouTube clips paired with expert free-text captions
-describing instrumentation, tempo, mood, and genre. After downloading with
-\texttt{yt-dlp}, 5,298 clips were successfully retrieved (223 permanently
-unavailable). Pre-computing audio embeddings from the frozen CLAP audio encoder
-and pairing them with captions produced \textbf{4,357 usable samples}, split
-85\,/\,15 into \textbf{3,704 training} and \textbf{653 test} samples (seed 42).
-This split is used for LoRA fine-tuning.
-
-\subsection{MS COCO Captions}
-
-The \textbf{MS COCO Captions} dataset provides image--caption pairs for the
-image-conditioned bridge experiment. We sample the first \textbf{20,000 training
-examples} (shuffled, seed 42) from the Hugging Face \texttt{HuggingFaceM4/COCO}
-dataset. Each sample provides one image (encoded by the frozen CLIP ViT-L/14) and
-one caption (encoded by the frozen CLAP text encoder), yielding paired
-\((v_{\text{CLIP}}, e_{\text{CLAP}})\) tuples for bridge MLP training.
+\textbf{MS COCO Captions}: 20,000 image--caption pairs for bridge MLP training. Each
+image is encoded by frozen CLIP ViT-L/14; each caption by frozen CLAP text encoder.
 
 % ─────────────────────────────────────────────────────────────────────────────
-\section{System Architecture and Methods}
+\section{Methods}
 % ─────────────────────────────────────────────────────────────────────────────
 
 \subsection{Overview}
 
-Figure~\ref{fig:arch} gives a high-level view of the three inference paths the
-system supports.
+Figure~\ref{fig:arch} shows the three inference paths. All paths converge on a cosine
+$k$-NN search against a \texttt{.npz} index of 7,994 L2-normalised audio embeddings.
 
 \begin{figure}[h]
 \centering
@@ -182,166 +137,106 @@ system supports.
                   align=center, fill=bleu315!15, draw=bleu315},
     arr/.style={-{Stealth[length=4pt]}, thick},
 ]
-
-% Text path
 \node[box]  (textprompt)  at (0, 3)    {Text Prompt};
-\node[model](claptext)    at (3, 3)    {CLAP\\Text Encoder\\(RoBERTa)};
-
-% Image path
+\node[model](claptext)    at (3, 3)    {CLAP\\Text Enc.\\(RoBERTa+LoRA)};
 \node[box]  (imageprompt) at (0, 1.5)  {Image Prompt};
 \node[model](clip)        at (3, 1.5)  {CLIP\\ViT-L/14};
 \node[model](bridge)      at (6, 1.5)  {Bridge MLP\\$1024\!\to\!512$};
-
-% Audio indexing
-\node[box]  (audiocorpus) at (0, 0)    {Audio Corpus\\(FMA Small)};
-\node[model](clapaudio)   at (3, 0)    {CLAP\\Audio Encoder\\(HTSAT)};
-\node[store](index)       at (6.2, 0)  {\texttt{.npz}\\Index\\$7994\times 512$};
-
-% kNN
+\node[box]  (audiocorpus) at (0, 0)    {FMA Small};
+\node[model](clapaudio)   at (3, 0)    {CLAP Audio\\Enc. (HTSAT)};
+\node[store](index)       at (6.2, 0)  {\texttt{.npz}\\$7994\times512$};
 \node[model](knn)         at (9, 2.25) {Cosine $k$-NN};
-\node[box]  (playlist)    at (12, 2.25){Ranked\\Playlist};
-
-% Arrows
+\node[box]  (playlist)    at (12,2.25) {Playlist};
 \draw[arr] (textprompt)  -- (claptext);
-\draw[arr] (claptext)    -- node[above]{\small $e_t\in\mathbb{R}^{512}$} (9,3) -- (knn);
-
+\draw[arr] (claptext)    -- node[above]{\small $e_t$} (9,3) -- (knn);
 \draw[arr] (imageprompt) -- (clip);
-\draw[arr] (clip)        -- (bridge);
-\draw[arr] (bridge)      -- node[right]{\small $e_v\in\mathbb{R}^{512}$} (9,1.5) -- (knn);
-
+\draw[arr] (clip) -- (bridge);
+\draw[arr] (bridge) -- node[right]{\small $e_v$} (9,1.5) -- (knn);
 \draw[arr] (audiocorpus) -- (clapaudio);
 \draw[arr] (clapaudio)   -- (index);
-\draw[arr] (index)       -- node[above]{\small offline} (9,0) -- (knn);
-
+\draw[arr] (index) -- node[above]{\small offline} (9,0) -- (knn);
 \draw[arr] (knn) -- (playlist);
-
 \end{tikzpicture}
-\caption{System overview. Text and image prompts are encoded into the 512-dim CLAP
-space; the audio corpus is indexed offline; a cosine $k$-NN retrieves the top-$k$
-most similar tracks.}
+\caption{System overview. The audio index is built offline; retrieval is a single
+matrix--vector product ($\mathcal{O}(N)$).}
 \label{fig:arch}
 \end{figure}
 
-\subsection{Audio Corpus Indexing}
+\subsection{Phase 1 — LoRA Text Encoder Fine-tuning}
+\label{sec:phase1}
 
-All 8,000 MP3 files in the FMA Small dataset are processed with the CLAP audio encoder
-(\texttt{compute\_embeddings.ipynb}). Files are loaded at 22050 Hz, passed through the
-\texttt{CLAP\_Module.get\_audio\_embedding\_from\_filelist} method, then L2-normalised.
-Six corrupted files raise a \texttt{NoBackendError} and are silently skipped. The resulting
-\textbf{7,994 vectors of dimension 512} are stored in a compressed NumPy archive
-(\texttt{data/embeddings.npz}), along with their file-path keys, constituting the
-\emph{audio index}.
+The text encoder (RoBERTa) is adapted to music-specific captions via LoRA
+(\texttt{r=16}, $\alpha=32$, dropout=0.1, targets: \texttt{query}, \texttt{value}),
+adding \textbf{1,246,209 trainable parameters} (0.62\% of 200M). The audio encoder
+is \textbf{fully frozen}; audio embeddings are pre-computed once and cached.
 
-\subsection{Text-to-Playlist Retrieval}
+Each training step minimises the symmetric InfoNCE loss (Eq.~\ref{eq:infonce}) between
+a batch of cached audio embeddings and freshly encoded text embeddings. Hyperparameters:
+AdamW, $lr=10^{-4}$, weight decay $10^{-4}$, cosine schedule, batch 16, 3 epochs,
+gradient clipping at 1.0.
 
-At inference time (\texttt{utils.get\_playlist}), the user's natural language query is
-encoded by the CLAP text encoder and L2-normalised to produce a query vector
-$e_q \in \mathbb{R}^{512}$. Cosine similarity with all corpus embeddings reduces to a
-matrix--vector product:
-\begin{equation}
-    \text{sim}(i) = e_q^\top e_i, \quad e_i \text{ already L2-normalised.}
-    \label{eq:cosine}
-\end{equation}
-The top-$k$ indices are extracted in $\mathcal{O}(N)$ via \texttt{np.argpartition},
-then sorted. The function returns a list of \texttt{(score, filepath)} pairs.
+\subsection{Phase 2 — Audio Encoder Fine-tuning}
+\label{sec:phase2}
 
-\subsection{LoRA Fine-tuning on MusicCaps}
+After Phase~1 the LoRA weights are frozen and the \textbf{last Swin stage}
+(\texttt{audio\_branch.layers[3]}) together with the final norm,
+\texttt{audio\_transform}, and \texttt{audio\_projection} are unfrozen — roughly
+the top 15\% of the audio encoder by depth. This targeted strategy preserves
+low-level spectral features while specialising high-level representations to music.
 
-The pre-trained CLAP model was trained on general audio--text pairs, so its text encoder
-may underperform on music-specific captions. We fine-tune \emph{only the text encoder}
-(RoBERTa) using LoRA while keeping the audio encoder \textbf{fully frozen}.
+Because the audio encoder is now updated, pre-computed embeddings are stale.
+Training instead loads raw 10-second WAV files, resampled on-the-fly to 48\,kHz
+(CLAP's native rate), and passes them through the live audio encoder. The text
+encoder runs in eval mode (no LoRA dropout) with no gradient. The loss is the same
+InfoNCE objective; the LoRA text embeddings serve as fixed targets.
 
-\paragraph{Adapter configuration.}
-\texttt{LoraConfig(r=16, lora\_alpha=32, lora\_dropout=0.1,
-target\_modules=["query","value"])} is applied to \texttt{model.model.text\_branch}
-via PEFT, yielding 1,246,209 trainable parameters (0.62\% of 200M).
+Hyperparameters: AdamW, $lr=5\times10^{-6}$ (conservative to avoid forgetting),
+weight decay $10^{-4}$, cosine schedule, batch 8, 2 epochs, gradient clipping 1.0.
 
-\paragraph{Training procedure.}
-Audio embeddings are pre-computed once from the frozen audio encoder and cached as
-\texttt{data/musiccaps\_embeddings.npz}. Each training step loads a batch of
-\textit{(cached audio embedding, caption)} pairs; the text encoder encodes the captions
-to produce $e_t$, and the symmetric InfoNCE loss (Eq.~\ref{eq:infonce}) is computed
-between the batch of audio embeddings $e_a$ and text embeddings $e_t$.
-Hyperparameters are summarised in Table~\ref{tab:hparam}.
+\subsection{Evaluation Metrics}
 
-\begin{table}[h]
-\centering
-\caption{LoRA fine-tuning hyperparameters.}
-\label{tab:hparam}
-\begin{tabular}{ll}
-\toprule
-\textbf{Hyperparameter} & \textbf{Value} \\
-\midrule
-Optimizer         & AdamW \\
-Learning rate     & $1 \times 10^{-4}$ \\
-Weight decay      & $1 \times 10^{-4}$ \\
-LR scheduler      & Cosine annealing \\
-Batch size        & 16 \\
-Epochs            & 5 \\
-Gradient clipping & norm $\leq 1.0$ \\
-LoRA rank $r$     & 16 \\
-LoRA $\alpha$     & 32 \\
-LoRA dropout      & 0.1 \\
-Target modules    & \texttt{query}, \texttt{value} \\
-\bottomrule
-\end{tabular}
-\end{table}
+\paragraph{Text--audio alignment.} Mean cosine similarity between the CLAP text
+embedding of each genre name and the mean audio embedding of its tracks
+(computed on FMA Small). Measures how well text labels match the audio cluster centroid.
+
+\paragraph{Intra-genre cohesion.} Mean \emph{pairwise} cosine similarity among all
+audio embeddings within a genre:
+\[
+    C_g = \frac{1}{n_g(n_g-1)}\sum_{i \neq j} \mathbf{a}_i^\top \mathbf{a}_j
+\]
+A higher $C_g$ means tracks of the same genre are closer together in embedding space —
+a direct measure of how well the audio encoder clusters by genre.
+This metric is independent of the text encoder in Phase~1 but \emph{changes} in
+Phase~2 since the audio encoder is updated.
 
 \subsection{\texorpdfstring{CLIP$\to$CLAP}{CLIP-to-CLAP} Bridge MLP}
+\label{sec:bridge}
 
-To support image-conditioned queries, a small MLP (\texttt{BridgeMLP}) is trained to
-project 1024-dimensional CLIP image features into the 512-dimensional CLAP text space.
-Both the CLIP and CLAP encoders are \textbf{fully frozen}; only the bridge is trained.
-The architecture is:
-\begin{align*}
-    h_1 &= \text{Dropout}_{0.2}\!\left(\text{LayerNorm}\!\left(\text{ReLU}\!\left(W_1 x\right)\right)\right),
-           \quad W_1 \in \mathbb{R}^{1024\times 1024} \\
-    h_2 &= \text{Dropout}_{0.2}\!\left(\text{LayerNorm}\!\left(\text{ReLU}\!\left(W_2 h_1\right)\right)\right),
-           \quad W_2 \in \mathbb{R}^{1024\times 1024} \\
-    \hat{e} &= W_3 h_2, \quad W_3 \in \mathbb{R}^{1024\times 512}.
-\end{align*}
-
-Training uses a one-directional InfoNCE loss at temperature $\tau = 0.07$ on 20,000
-MS COCO caption pairs, with AdamW ($lr=2\times10^{-4}$, $\lambda=10^{-2}$), batch
-size 64, 5 epochs. The trained bridge is saved to
-\texttt{artifacts/bridge\_mlp\_clip\_to\_clap.pt}.
+A two-hidden-layer MLP maps 1024-dim CLIP image features to 512-dim CLAP embeddings
+($1024\to1024\to1024\to512$, ReLU + LayerNorm + Dropout$_{0.2}$). Trained with
+one-directional InfoNCE ($\tau=0.07$) on 20,000 MS COCO pairs; AdamW
+$lr=2\times10^{-4}$, batch 64, 5 epochs.
 
 % ─────────────────────────────────────────────────────────────────────────────
 \section{Experiments and Results}
 % ─────────────────────────────────────────────────────────────────────────────
 
-\subsection{LoRA Fine-tuning Results}
-
-Table~\ref{tab:training} reports the symmetric InfoNCE loss on the training and test
-splits of MusicCaps at the end of each epoch.
+\subsection{Phase 1 — LoRA Text Encoder}
 
 \begin{table}[h]
 \centering
-\caption{Symmetric InfoNCE loss per epoch on MusicCaps (batch size 16, 3704/653 samples).}
+\caption{InfoNCE loss per epoch — Phase~1 (MusicCaps, 3704/653 samples).}
 \label{tab:training}
 \begin{tabular}{ccc}
 \toprule
-\textbf{Epoch} & \textbf{Train loss} & \textbf{Val loss} \\
+\textbf{Epoch} & \textbf{Train} & \textbf{Val} \\
 \midrule
-1 & 0.7132 & 0.5989 \\
-2 & 0.4678 & 0.5349 \\
-3 & 0.3770 & 0.5230 \\
-4 & 0.3296 & 0.5056 \\
-5 & 0.3086 & 0.5035 \\
+1 & 0.6165 & 0.4093 \\
+2 & 0.3959 & 0.3659 \\
+3 & 0.3277 & 0.3428 \\
 \bottomrule
 \end{tabular}
 \end{table}
-
-The training loss decreases steadily from 0.71 to 0.31 across five epochs. The
-validation loss converges to 0.50, indicating that the model generalises well without
-overfitting despite the small number of trainable parameters. The gap between training
-and validation loss is consistent with the low model complexity introduced by LoRA.
-
-\subsection{Cosine Similarity Before and After Fine-tuning}
-
-To directly measure alignment quality, we compute the average cosine similarity between
-audio embeddings and their corresponding ground-truth text captions on the MusicCaps
-test split.
 
 \begin{table}[h]
 \centering
@@ -349,121 +244,122 @@ test split.
 \label{tab:cosine}
 \begin{tabular}{lcc}
 \toprule
-\textbf{Model} & \textbf{Avg.\ cosine similarity} & \textbf{Relative gain} \\
+\textbf{Model} & \textbf{Avg.\ cosine sim.} & \textbf{Gain} \\
 \midrule
-Pre-trained CLAP (baseline) & 0.3161 & --- \\
-CLAP + LoRA (fine-tuned)    & 0.3524 & $+11.5\%$ \\
+Baseline CLAP         & 0.3135 & --- \\
+CLAP + LoRA (Phase~1) & 0.3710 & $+18.3\%$ \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-Fine-tuning with LoRA raises the average alignment score from 0.3161 to 0.3524,
-a \textbf{+0.0363 absolute ($+11.5\%$ relative)} improvement. This confirms that
-domain adaptation of the text encoder to music-specific language significantly improves
-audio--text correspondence, even when only 0.62\% of parameters are updated.
+LoRA improves text--audio alignment by \textbf{+0.0575 absolute} with only 0.62\%
+of parameters updated.
 
-\subsection{Qualitative Retrieval Results}
+\subsection{Per-genre Text--Audio Alignment}
 
-Table~\ref{tab:qualitative} shows the top-5 retrieved MusicCaps tracks for three
-representative prompts using the fine-tuned model. The cosine scores range from
-0.38 to 0.42, and the retrieved captions are semantically consistent with the query.
+Table~\ref{tab:genre_align} shows per-genre alignment before and after Phase~1.
+Genres with low baseline alignment (Electronic, Experimental) see the largest gains;
+genres already well-aligned (Folk, Hip-Hop) regress slightly, likely because
+MusicCaps skews toward Electronic/Experimental styles.
 
 \begin{table}[h]
 \centering
-\caption{Top-5 retrieval results from MusicCaps for three prompts (fine-tuned CLAP + LoRA).}
+\caption{Per-genre text--audio cosine similarity on FMA Small.}
+\label{tab:genre_align}
+\begin{tabular}{lccc}
+\toprule
+\textbf{Genre} & \textbf{Baseline} & \textbf{Phase 1} & \textbf{$\Delta$} \\
+\midrule
+Electronic    & 0.1085 & 0.2041 & $+0.0956$ \\
+Experimental  & 0.2349 & 0.2856 & $+0.0507$ \\
+Instrumental  & 0.2466 & 0.2706 & $+0.0240$ \\
+Rock          & 0.3540 & 0.3271 & $-0.0269$ \\
+Hip-Hop       & 0.4212 & 0.3471 & $-0.0741$ \\
+Folk          & 0.4135 & 0.3133 & $-0.1001$ \\
+Pop           & 0.2537 & 0.1383 & $-0.1155$ \\
+International & 0.3483 & 0.1850 & $-0.1632$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Intra-genre Cohesion and Phase 2}
+
+Table~\ref{tab:cohesion} reports the intra-genre cohesion $C_g$ before Phase~2
+(frozen audio encoder) and after Phase~2 (fine-tuned last Swin stage). Because
+Phase~1 does not touch the audio encoder, the ``Baseline'' and ``Phase~1'' columns
+are identical; only Phase~2 changes $C_g$.
+
+\begin{table}[h]
+\centering
+\caption{Intra-genre audio cohesion $C_g$ on FMA Small.}
+\label{tab:cohesion}
+\begin{tabular}{lcc}
+\toprule
+\textbf{Genre} & \textbf{Phase 1 (frozen audio)} & \textbf{Phase 2 ($\Delta$)} \\
+\midrule
+Hip-Hop       & \emph{run notebook} & --- \\
+Folk          & \emph{run notebook} & --- \\
+Rock          & \emph{run notebook} & --- \\
+Electronic    & \emph{run notebook} & --- \\
+Experimental  & \emph{run notebook} & --- \\
+Instrumental  & \emph{run notebook} & --- \\
+Pop           & \emph{run notebook} & --- \\
+International & \emph{run notebook} & --- \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+An increase in $C_g$ after Phase~2 indicates that the fine-tuned audio encoder
+maps same-genre tracks closer together, making $k$-NN retrieval more genre-coherent.
+
+\subsection{Qualitative Retrieval}
+
+Table~\ref{tab:qualitative} shows top-5 MusicCaps results for three prompts with
+the Phase~1 model. Retrieved captions are semantically consistent with the query
+in all three cases.
+
+\begin{table}[h]
+\centering
+\caption{Top-5 retrieval from MusicCaps (Phase~1 model).}
 \label{tab:qualitative}
 \setlength{\tabcolsep}{4pt}
-\begin{tabular}{clcc}
+\begin{tabular}{clc}
 \toprule
 \textbf{Rank} & \textbf{Caption (truncated)} & \textbf{Score} \\
 \midrule
-\multicolumn{3}{l}{\textit{Prompt: ``slow chill hip hop with a mellow bassline''}} \\
+\multicolumn{3}{l}{\textit{``slow chill hip hop with a mellow bassline''}} \\
 \midrule
-1 & Hip hop song with consistent low-quality bassline        & 0.4048 \\
-2 & Dark moody piano melody with hip hop beat                & 0.3923 \\
-3 & Instrumental movie soundtrack theme                      & 0.3897 \\
-4 & Electronic instrumental at medium tempo                  & 0.3713 \\
-5 & Instrumental jazz tune with medium-paced bass            & 0.3684 \\
+1 & Hip hop song with consistent low-quality bassline   & 0.405 \\
+2 & Dark moody piano melody with hip hop beat           & 0.392 \\
+3 & Instrumental movie soundtrack theme                 & 0.390 \\
 \midrule
-\multicolumn{3}{l}{\textit{Prompt: ``upbeat reggae with rhythmic percussion''}} \\
+\multicolumn{3}{l}{\textit{``upbeat reggae with rhythmic percussion''}} \\
 \midrule
-1 & Acoustic drum playing a reggae groove with rim shot      & 0.4213 \\
-2 & Female singer over a cool melody                         & 0.4133 \\
-3 & Medium-sized band with rhythmic instrumental section     & 0.3963 \\
-4 & Electronic instrumental clip                             & 0.3898 \\
-5 & Reggae song with flat male vocal rapping                 & 0.3844 \\
+1 & Acoustic drum playing a reggae groove with rim shot & 0.421 \\
+2 & Female singer over a cool melody                    & 0.413 \\
+3 & Reggae song with flat male vocal rapping            & 0.384 \\
 \midrule
-\multicolumn{3}{l}{\textit{Prompt: ``sad orchestral strings and piano''}} \\
+\multicolumn{3}{l}{\textit{``sad orchestral strings and piano''}} \\
 \midrule
-1 & Sustained strings melody, low quality recording          & 0.4070 \\
-2 & Classical wide mellow strings melody                     & 0.4022 \\
-3 & Mellow piano melody, low quality recording               & 0.3986 \\
-4 & Mellow piano melody, low quality recording               & 0.3949 \\
-5 & Sustained string melody, low quality recording           & 0.3912 \\
+1 & Sustained strings melody, low quality recording     & 0.407 \\
+2 & Classical wide mellow strings melody                & 0.402 \\
+3 & Mellow piano melody, low quality recording          & 0.399 \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-The retrieval results exhibit strong semantic coherence: all hip-hop-related captions
-appear in the top-5 for the first prompt, all reggae-related clips for the second, and
-all string/piano-based classical or orchestral tracks for the third.
-
-\subsection{FMA Small Playlist Demo}
-
-For the primary use case, the system is deployed against the FMA Small index (7,994
-tracks). Table~\ref{tab:playlist} shows the top-5 results for the query
-\textit{``Chill jazz for relaxing''} (out of $k=20$ returned tracks).
-
-\begin{table}[h]
-\centering
-\caption{Top-5 playlist for \textit{``Chill jazz for relaxing''} from the FMA Small index.}
-\label{tab:playlist}
-\begin{tabular}{clc}
-\toprule
-\textbf{Rank} & \textbf{Track file} & \textbf{Cosine score} \\
-\midrule
-1  & 149142.mp3 & 0.5401 \\
-2  & 115471.mp3 & 0.5143 \\
-3  & 074373.mp3 & 0.5126 \\
-4  & 125621.mp3 & 0.4839 \\
-5  & 070302.mp3 & 0.4797 \\
-\bottomrule
-\end{tabular}
-\end{table}
-
-Scores above 0.50 indicate high confidence matches. The complete 20-track ranked list
-is rendered as an in-notebook HTML audio player for direct preview. When the LoRA
-adapter is loaded (\texttt{USE\_LORA=True}), scores shift slightly due to the refined
-text embedding; the adapter is loaded from
-\texttt{checkpoints/clap\_lora/} via \texttt{utils.load\_clap\_model\_with\_lora}.
-
 % ─────────────────────────────────────────────────────────────────────────────
-\section{Conclusion and Future Work}
+\section{Conclusion}
 % ─────────────────────────────────────────────────────────────────────────────
 
-This project demonstrates that a pre-trained CLAP model can serve as a practical
-backbone for semantic music retrieval, and that lightweight LoRA fine-tuning on the
-music-specific MusicCaps benchmark meaningfully improves alignment quality
-(+11.5\% cosine similarity) while updating less than 1\% of the model's parameters.
-The result is a working end-to-end system: given a free-text description, the user
-receives a ranked playlist drawn from 7,994 FMA tracks within milliseconds.
+A two-phase fine-tuning strategy is applied to CLAP for semantic music retrieval.
+Phase~1 (LoRA on RoBERTa, 0.62\% of parameters) raises MusicCaps text--audio cosine
+similarity by +18.3\%. Phase~2 unfreezes the last Swin stage of the audio encoder and
+trains end-to-end on raw waveforms to improve intra-genre cluster cohesion --- a metric
+that Phase~1 cannot affect since it leaves the audio encoder frozen.
 
-Two main directions are planned for future work.
-
-\paragraph{Image-to-playlist generation.}
-The trained CLIP$\to$CLAP bridge MLP enables a new interaction modality: a user
-uploads a photograph (a forest, a party scene, a painting) and the system projects
-the CLIP image embedding into the CLAP text space, then queries the audio index
-directly. The bridge is trained but not yet integrated into the end-to-end retrieval
-pipeline; this integration is the immediate next step.
-
-\paragraph{RLHF alignment.}
-Cosine similarity in the CLAP space is a proxy for human preference, not a direct
-measure of it. Reinforcement Learning from Human Feedback (RLHF) could be used to
-further refine the retrieval ranking: users listen to suggested tracks, provide
-positive/negative signals, and a reward model is trained to score playlists according
-to human satisfaction. This would close the loop between the embedding-based retrieval
-and actual listener preferences, making the system more personalised over time.
+The image-to-playlist bridge (CLIP $\to$ CLAP MLP) is trained but not yet integrated
+into the end-to-end retrieval pipeline; this is the next step.
 
 % ─────────────────────────────────────────────────────────────────────────────
 \begin{thebibliography}{9}

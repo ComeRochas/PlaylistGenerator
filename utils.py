@@ -1,7 +1,3 @@
-"""
-utils
-"""
-
 from __future__ import annotations
 
 import urllib.request
@@ -25,9 +21,9 @@ DEFAULT_CHECKPOINT_URL = (
     "music_audioset_epoch_15_esc_90.14.pt"
 )
 DEFAULT_CHECKPOINT_PATH = Path("checkpoints/music_audioset_epoch_15_esc_90.14.pt")
-DEFAULT_SONGS_DIR  = Path("data/fma_small")
+DEFAULT_SONGS_DIR = Path("data/fma_small")
 DEFAULT_METADATA_DIR = Path("data/fma_metadata")
-DEFAULT_EMB_PATH  = Path("data/embeddings.npz")
+DEFAULT_EMB_PATH = Path("data/embeddings.npz")
 
 
 def ensure_checkpoint(
@@ -67,9 +63,7 @@ def load_clap_model(
     return model
 
 
-
 def collect_audio_files(root: Path | str) -> list[Path]:
-    """Return all audio files sorted by path."""
     root = Path(root)
     if not root.exists():
         raise FileNotFoundError(f"Audio directory does not exist: {root}")
@@ -103,13 +97,11 @@ def load_embeddings(path: Path | str) -> tuple[list[str], np.ndarray]:
     return file_list, embeddings
 
 
-
 def knn_search(
     query_emb: np.ndarray,
     corpus_embs: np.ndarray,
     k: int = 20,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Easy brute force knn"""
     scores: np.ndarray = corpus_embs @ query_emb
     k = min(k, len(scores))
     top_idx: np.ndarray = np.argpartition(-scores, k - 1)[:k]
@@ -136,7 +128,6 @@ def symmetric_contrastive_loss(
 
 
 class MusicCapsDataset(Dataset):
-    """PyTorch Dataset"""
 
     def __init__(self, embeddings_path: Path | str, captions_csv: Path | str) -> None:
         embeddings_path = Path(embeddings_path)
@@ -176,7 +167,6 @@ def eval_audio_text_cosine_similarity(
     device: str = "cpu",
     batch_size: int = 32,
 ) -> float:
-    """Mean cosine similarity"""
     model.eval()
     all_sims: list[float] = []
 
@@ -184,14 +174,13 @@ def eval_audio_text_cosine_similarity(
         for start in range(0, len(sample_indices), batch_size):
             idx_batch = sample_indices[start : start + batch_size]
             audio_embs = torch.stack([dataset[i][0] for i in idx_batch]).to(device)
-            captions   = [dataset[i][1] for i in idx_batch]
+            captions = [dataset[i][1] for i in idx_batch]
 
             text_embs_np = model.get_text_embedding(captions, use_tensor=False)
             text_embs = torch.tensor(text_embs_np, dtype=torch.float32, device=device)
 
-            # Both inputs normalised → dot product = cosine similarity
             a = F.normalize(audio_embs, p=2, dim=-1)
-            t = F.normalize(text_embs,  p=2, dim=-1)
+            t = F.normalize(text_embs, p=2, dim=-1)
             sims = (a * t).sum(dim=-1)
             all_sims.extend(sims.cpu().tolist())
 
@@ -204,7 +193,6 @@ def load_clap_model_with_lora(
     checkpoint_url: str = DEFAULT_CHECKPOINT_URL,
     device: str | None = None,
 ) -> laion_clap.CLAP_Module:
-    """Load a CLAP model and apply LoRA"""
     from peft import PeftModel
 
     model = load_clap_model(checkpoint_path, checkpoint_url, device=device)
@@ -226,13 +214,12 @@ def load_clap_model_with_lora(
 
 
 class MusicCapsRawDataset(Dataset):
-    """Dataset returning ``(waveform, caption)`` pairs for audio-encoder fine-tuning.
+    """Dataset returning (waveform, caption) pairs for audio-encoder fine-tuning.
 
-    Audio is resampled to 48 kHz, converted to mono, and padded / trimmed to
-    exactly 10 s so every batch has a uniform shape.
+    Audio is resampled to 48 kHz, mono, and padded/trimmed to 10 s.
     """
 
-    TARGET_SR      = 48_000
+    TARGET_SR = 48_000
     TARGET_SAMPLES = 480_000  # 10 s @ 48 kHz
 
     def __init__(self, wav_dir: Path | str, captions_csv: Path | str) -> None:
@@ -274,12 +261,7 @@ def unfreeze_audio_encoder(
     model: laion_clap.CLAP_Module,
     top_n_stages: int = 1,
 ) -> None:
-    """Unfreeze the last *top_n_stages* Swin stages + norm + audio projection heads.
-
-    The text branch (LoRA) is explicitly re-frozen so only audio-side parameters
-    receive gradients.  Call this after :func:`inject_lora_text_encoder` and
-    Phase-1 training.
-    """
+    """Unfreeze the last top_n_stages Swin stages + norm + audio projection heads."""
     for p in model.model.text_branch.parameters():
         p.requires_grad_(False)
 
@@ -302,7 +284,7 @@ def unfreeze_audio_encoder(
         model.model.logit_scale_a.requires_grad_(True)
 
     trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    total     = sum(p.numel() for p in model.parameters())
+    total = sum(p.numel() for p in model.parameters())
     print(
         f"Audio encoder unfrozen (last {top_n_stages} Swin stage(s) + norm + projection) — "
         f"trainable: {trainable:,} / {total:,} ({100 * trainable / total:.2f}%)"

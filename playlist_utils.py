@@ -1,5 +1,3 @@
-"""Playlist generation utilities: embedding randomisation, dual-anchor KNN, and export."""
-
 from __future__ import annotations
 
 import re
@@ -10,11 +8,7 @@ import numpy as np
 
 
 def scramble_embedding(emb: np.ndarray, std: float = 0.05) -> np.ndarray:
-    """Add isotropic Gaussian noise to an L2-normalised embedding, then re-normalise.
-
-    ``std=0.05`` is a mild perturbation that keeps the direction close to the
-    original while making repeated queries return slightly different playlists.
-    """
+    """Add small Gaussian noise to an L2-normalised embedding, then re-normalise."""
     noise = np.random.normal(0.0, std, emb.shape).astype(emb.dtype)
     perturbed = emb + noise
     norm = np.linalg.norm(perturbed)
@@ -28,17 +22,7 @@ def dual_anchor_knn(
     corpus_embs: np.ndarray,
     k: int = 20,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """K-nearest-neighbour search biased by two corpus anchors.
-
-    Scores each track as ``10·cos(track, best_match) + 1·cos(track, worst_match)``
-    where best/worst are the corpus tracks most and least similar to the query.
-    This keeps results relevant while injecting mild diversity.
-
-    Both inputs must be L2-normalised so dot products equal cosine similarities.
-
-    Returns:
-        ``(indices, scores)`` sorted best-first, length ``min(k, N)``.
-    """
+    """KNN biased by two corpus anchors (best and worst match) for mild diversity."""
     query_emb = np.asarray(query_emb, dtype=np.float32)
     corpus_embs = np.asarray(corpus_embs, dtype=np.float32)
 
@@ -60,7 +44,6 @@ def dual_anchor_knn(
 
 
 def _prompt_slug(prompt: str, max_len: int = 48) -> str:
-    """Turn a free-text prompt into a safe directory name."""
     slug = prompt.lower().strip()
     slug = re.sub(r"[^\w\s]", "", slug)
     slug = re.sub(r"\s+", "_", slug)
@@ -69,7 +52,6 @@ def _prompt_slug(prompt: str, max_len: int = 48) -> str:
 
 
 def _unique_dir(root: Path, slug: str) -> Path:
-    """Return ``root/slug``, or ``root/slug_2``, ``root/slug_3``, … if taken."""
     candidate = root / slug
     if not candidate.exists():
         return candidate
@@ -87,25 +69,7 @@ def save_playlist(
     output_root: Path | str = Path("playlists"),
     cover_image=None,
 ) -> Path:
-    """Copy playlist tracks (and optionally a cover image) into a new folder.
-
-    The folder is created under *output_root* with a name derived from the
-    prompt (spaces → underscores, special characters stripped).  If a folder
-    with that name already exists a numeric suffix is appended (``_2``, ``_3``…).
-
-    Track filenames are prefixed with their rank so they sort correctly in any
-    file manager (``01_track.mp3``, ``02_track.mp3``, …).
-
-    Args:
-        prompt:       The text prompt used to generate the playlist.
-        track_paths:  Ordered list of source audio file paths (best-first).
-        output_root:  Parent directory for all playlists (default: ``playlists/``).
-        cover_image:  Either a ``PIL.Image`` or a ``Path`` to an image file.
-                      Saved as ``cover.jpg`` inside the playlist folder.
-
-    Returns:
-        Path to the newly created playlist folder.
-    """
+    """Copy tracks into a new folder under output_root named after the prompt."""
     output_root = Path(output_root)
     playlist_dir = _unique_dir(output_root, _prompt_slug(prompt))
     playlist_dir.mkdir(parents=True)
