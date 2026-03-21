@@ -17,7 +17,7 @@ def _get_pipeline(device: str):
 
         dtype = torch.float16 if device == "cuda" else torch.float32
         _pipeline = StableDiffusionPipeline.from_pretrained(
-            "stabilityai/stable-diffusion-2-1",
+            "segmind/small-sd",
             torch_dtype=dtype,
         )
         _pipeline = _pipeline.to(device)
@@ -32,7 +32,7 @@ def generate_playlist_image(
     guidance_scale: float = 7.5,
     device: str | None = None,
 ) -> "Image":
-    """Generate a playlist cover image from a text prompt using Stable Diffusion."""
+    """Generate a playlist cover image from a text prompt."""
     import torch
 
     if device is None:
