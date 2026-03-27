@@ -54,20 +54,21 @@
 
 Music streaming platforms host hundreds of millions of tracks, yet their recommendation
 engines still rely largely on collaborative filtering and rigid keyword tags.
-\textbf{PlaylistGenerator} addresses this by building a semantic retrieval system that
-maps audio and free-text queries into a shared embedding space using CLAP~\cite{elizalde2023clap}.
+Our \textbf{PlaylistGenerator} addresses this by building a semantic retrieval system that
+maps audio, text and visual queries into a shared embedding space using CLAP~\cite{elizalde2023clap}. Beyond retrieval, the system generates contextual visual content to provide a complete user experience.
 
-The system is built around four components:
+The system is built around five components:
 \begin{enumerate}
-    \item \textbf{Audio indexing} --- pre-compute CLAP audio embeddings for every track
+    \item \textbf{Audio indexing} --- We pre-compute CLAP audio embeddings for every track
           in FMA Small and store them in a compressed \texttt{.npz} index.
-    \item \textbf{Text retrieval} --- encode the user prompt with the CLAP text encoder
+    \item \textbf{Text retrieval} --- We encode the user prompt with the CLAP text encoder
           and run a cosine $k$-NN search against the index.
-    \item \textbf{Two-phase fine-tuning} --- (i) adapt the text encoder with LoRA on
+    \item \textbf{Two-phase fine-tuning} --- We (i) fine-tune the text encoder with LoRA on
           MusicCaps; (ii) further fine-tune the last stage of the audio encoder
           end-to-end on raw waveforms to tighten genre clusters in audio embedding space.
     \item \textbf{Image-to-playlist bridge} --- a small MLP projects CLIP image features
           into the CLAP text space, enabling image-conditioned queries.
+    \item \textbf{Visual Generation} --- Utilizing Stable Diffusion to generate high-quality playlist covers based on the synthesized text prompt.
 \end{enumerate}
 
 % ─────────────────────────────────────────────────────────────────────────────
@@ -89,76 +90,93 @@ symmetric InfoNCE loss:
                   {\sum_{j} e^{s\,\mathbf{a}_i^\top\mathbf{t}_j}}
     \label{eq:infonce}
 \end{equation}
-where $s = \exp(\texttt{logit\_scale})$ is learned and $N$ is the batch size.
-The checkpoint used is \texttt{music\_audioset\_epoch\_15\_esc\_90.14.pt} (90.14\%
-on ESC-50).
+where $s = \exp(\texttt{logit\_scale})$ is a learnable temperature parameter and $N$ is the batch size.
+We used the \texttt{music\_audioset\_epoch\_15\_esc\_90.14.pt} checkpoint which achieves 90.14 \% accuracy on the ESC-50 benchmark.
 
 \subsection{LoRA and CLIP}
 
-LoRA~\cite{hu2022lora} is used as-is to adapt the text encoder (see Section~\ref{sec:phase1}).
-CLIP~\cite{radford2021clip} ViT-L/14 produces 1024-dim image embeddings that feed the
-bridge MLP (Section~\ref{sec:bridge}).
+To adapt the model to the specific nuances of musical descriptions, we employ LoRA~\cite{hu2022lora} for parameter efficient fine-tuning the layers of RoBERTa, the text encoder(see Section~\ref{sec:phase1}).
+
+For visual modality, we leverage CLIP (ViT-L/14) to produce 1024-dimensional image embeddings. These embeddings serve as the input for our bridge MLP, which aligns visual semantics with the music-text latent space (Section~\ref{sec:bridge}).
 
 % ─────────────────────────────────────────────────────────────────────────────
 \section{Datasets}
 % ─────────────────────────────────────────────────────────────────────────────
+To develop and evaluate the PlaylistGenerator, we leverage three distinct datasets for audio indexing, semantic alignment, and cross-modal bridge training.\begin{itemize}
+\item \textbf{FMA Small (Audio Indexing)}~\cite{defferrard2017fma}: This dataset provides the retrieval library, consisting of 8,000 30-second tracks across eight genres. After excluding six corrupted files, 7,994 tracks were indexed for $k$-NN search.
+\item \textbf{MusicCaps (Text-Audio Fine-tuning)}~\cite{agostinelli2023musiclm}: Utilized for Phase 1 LoRA adaptation, this dataset contains 5,521 expert-captioned clips. After processing, 4,357 valid samples were paired with audio embeddings. These are split into training (3,704) and testing (653) sets (85/15 ratio). For Phase 2, the model accesses the raw WAV files directly to specialize the audio encoder.
 
-\textbf{FMA Small}~\cite{defferrard2017fma}: 8,000 tracks across 8 genres (Hip-Hop,
-Pop, Folk, Experimental, Rock, International, Electronic, Instrumental), 30-second MP3s
-at 44.1 kHz. Six corrupt files are silently skipped, giving \textbf{7,994 indexed tracks}.
+\item \textbf{MS COCO Captions (Cross-modal Alignment)}: To train the CLIP-CLAP bridge MLP, we employ 20,000 image--caption pairs. Visual features are extracted via a frozen CLIP ViT-L/14, while text features are processed by the frozen CLAP text encoder to align both modalities.
 
-\textbf{MusicCaps}~\cite{agostinelli2023musiclm}: 5,521 expert-captioned 10-second
-YouTube clips. After downloading, 5,298 are available. Pairing with pre-computed audio
-embeddings yields \textbf{4,357 samples} (85/15 split, seed 42: 3,704 train / 653 test).
-Phase~2 uses raw WAV files directly rather than cached embeddings.
-
-\textbf{MS COCO Captions}: 20,000 image--caption pairs for bridge MLP training. Each
-image is encoded by frozen CLIP ViT-L/14; each caption by frozen CLAP text encoder.
+\end{itemize}
 
 % ─────────────────────────────────────────────────────────────────────────────
 \section{Methods}
 % ─────────────────────────────────────────────────────────────────────────────
 
 \subsection{Overview}
-
-Figure~\ref{fig:arch} shows the three inference paths. All paths converge on a cosine
-$k$-NN search against a \texttt{.npz} index of 7,994 L2-normalised audio embeddings.
-
 \begin{figure}[h]
 \centering
 \begin{tikzpicture}[
     font=\small,
-    box/.style={draw, rounded corners=3pt, minimum width=2.6cm, minimum height=0.75cm,
-                align=center, fill=bleu303pale, draw=bleu303},
-    model/.style={draw, rounded corners=3pt, minimum width=2.6cm, minimum height=0.75cm,
-                  align=center, fill=rouge485!15, draw=rouge485},
+    box/.style={draw, rounded corners=3pt, minimum width=2.6cm, minimum height=0.8cm,
+                align=center, fill=blue!10, draw=blue!50!black},
+    model/.style={draw, rounded corners=3pt, minimum width=2.6cm, minimum height=0.8cm,
+                  align=center, fill=red!10, draw=red!70!black},
     store/.style={draw, cylinder, shape border rotate=90,
-                  minimum width=1.8cm, minimum height=0.9cm,
-                  align=center, fill=bleu315!15, draw=bleu315},
-    arr/.style={-{Stealth[length=4pt]}, thick},
+                  minimum width=1.8cm, minimum height=1cm,
+                  align=center, fill=gray!10, draw=gray!80!black},
+    arr/.style={-{Stealth[length=5pt]}, thick},
+    node distance=1.2cm
 ]
-\node[box]  (textprompt)  at (0, 3)    {Text Prompt};
-\node[model](claptext)    at (3, 3)    {CLAP\\Text Enc.\\(RoBERTa+LoRA)};
-\node[box]  (imageprompt) at (0, 1.5)  {Image Prompt};
-\node[model](clip)        at (3, 1.5)  {CLIP\\ViT-L/14};
-\node[model](bridge)      at (6, 1.5)  {Bridge MLP\\$1024\!\to\!512$};
-\node[box]  (audiocorpus) at (0, 0)    {FMA Small};
-\node[model](clapaudio)   at (3, 0)    {CLAP Audio\\Enc. (HTSAT)};
-\node[store](index)       at (6.2, 0)  {\texttt{.npz}\\$7994\times512$};
-\node[model](knn)         at (9, 2.25) {Cosine $k$-NN};
-\node[box]  (playlist)    at (12,2.25) {Playlist};
-\draw[arr] (textprompt)  -- (claptext);
-\draw[arr] (claptext)    -- node[above]{\small $e_t$} (9,3) -- (knn);
+
+% --- NODES LAYOUT ---
+
+% Text Path
+\node[box]   (textprompt)  at (0, 4)    {Text Prompt};
+\node[model] (claptext)    at (3.5, 4)  {CLAP Text Enc.\\(RoBERTa + LoRA)};
+
+% Image Path
+\node[box]   (imageprompt) at (0, 2)    {Image Prompt};
+\node[model] (clip)        at (3.5, 2)  {CLIP ViT-L/14};
+\node[model] (bridge)      at (7, 2)    {Bridge MLP\\$1024 \to 512$};
+
+% Audio Path (Offline)
+\node[box]   (audiocorpus) at (0, 0)    {FMA Small};
+\node[model] (clapaudio)   at (3.5, 0)  {CLAP Audio Enc.\\(HTSAT)};
+\node[store] (index)       at (7, 0)    {\texttt{.npz} Index\\$7994 \times 512$};
+
+% Generation Path (Stable Diffusion)
+\node[model] (sd)          at (7, 5.5)  {Stable Diffusion\\(segmind/small-sd)};
+
+% Processing & Output
+\node[model] (knn)         at (10.5, 2) {Cosine $k$-NN\\Search};
+\node[box, fill=green!10, draw=green!50!black] (playlist) at (13.5, 2) {\textbf{Playlist}\\(Audio Tracks)};
+\node[box, fill=orange!10, draw=orange!50!black] (cover) at (13.5, 5.5) {\textbf{Cover Art}\\(Image)};
+
+% --- ARROWS ---
+
+% Text Flow
+\draw[arr] (textprompt) -- (claptext);
+\draw[arr] (claptext) -- node[above, pos=0.6]{$e_t$} (10.5, 4) -- (knn);
+\draw[arr] (textprompt) |- (sd);
+\draw[arr] (sd) -- (cover);
+
+% Image Flow
 \draw[arr] (imageprompt) -- (clip);
 \draw[arr] (clip) -- (bridge);
-\draw[arr] (bridge) -- node[right]{\small $e_v$} (9,1.5) -- (knn);
+\draw[arr] (bridge) -- node[above]{$e_v$} (knn);
+
+% Audio Flow
 \draw[arr] (audiocorpus) -- (clapaudio);
-\draw[arr] (clapaudio)   -- (index);
-\draw[arr] (index) -- node[above]{\small offline} (9,0) -- (knn);
+\draw[arr] (clapaudio) -- (index);
+\draw[arr] (index) -- node[below, pos=0.5]{offline embeddings} (10.5, 0) -- (knn);
+
+% Final Output
 \draw[arr] (knn) -- (playlist);
+
 \end{tikzpicture}
-\caption{System overview. The audio index is built offline; retrieval is a single
-matrix--vector product ($\mathcal{O}(N)$).}
+\caption{Architecture multimodale du système. Le prompt textuel pilote simultanément la recherche acoustique ($k$-NN) et la synthèse visuelle (Stable Diffusion). L'entrée image est projetée dans l'espace CLAP via le Bridge MLP.}
 \label{fig:arch}
 \end{figure}
 
@@ -171,17 +189,14 @@ adding \textbf{1,246,209 trainable parameters} (0.62\% of 200M). The audio encod
 is \textbf{fully frozen}; audio embeddings are pre-computed once and cached.
 
 Each training step minimises the symmetric InfoNCE loss (Eq.~\ref{eq:infonce}) between
-a batch of cached audio embeddings and freshly encoded text embeddings. Hyperparameters:
-AdamW, $lr=10^{-4}$, weight decay $10^{-4}$, cosine schedule, batch 16, 3 epochs,
-gradient clipping at 1.0.
+a batch of cached audio embeddings and freshly encoded text embeddings. Optimization is performed using AdamW with a learning rate of $10^{-4}$, a weight decay of $10^{-4}$, and a cosine annealing schedule over 3 epochs. We use a batch size of 16 and apply gradient clipping at a threshold of 1.0 to ensure numerical stability.
 
 \subsection{Phase 2 — Audio Encoder Fine-tuning}
 \label{sec:phase2}
 
-After Phase~1 the LoRA weights are frozen and the \textbf{last Swin stage}
-(\texttt{audio\_branch.layers[3]}) together with the final norm,
-\texttt{audio\_transform}, and \texttt{audio\_projection} are unfrozen — roughly
-the top 15\% of the audio encoder by depth. This targeted strategy preserves
+In Phase 2, we shift our focus toward specializing the audio modality. While the text encoder remains frozen with its LoRA weights from Phase 1, we selectively unfreeze the \textbf{last Swin stage}
+(\texttt{audio\_branch.layers[3]}), the final norm,
+\texttt{audio\_transform}, and \texttt{audio\_projection}. This targeted strategy, affecting approximately the top 15\% of the encoder's depth, preserves
 low-level spectral features while specialising high-level representations to music.
 
 Because the audio encoder is now updated, pre-computed embeddings are stale.
@@ -190,32 +205,43 @@ Training instead loads raw 10-second WAV files, resampled on-the-fly to 48\,kHz
 encoder runs in eval mode (no LoRA dropout) with no gradient. The loss is the same
 InfoNCE objective; the LoRA text embeddings serve as fixed targets.
 
-Hyperparameters: AdamW, $lr=5\times10^{-6}$ (conservative to avoid forgetting),
-weight decay $10^{-4}$, cosine schedule, batch 8, 2 epochs, gradient clipping 1.0.
+Optimization is performed using AdamW with a learning rate of $lr=5\times10^{-6}$ (conservative to avoid forgetting), a weight decay of $10^{-4}$, and a cosine learning rate over 2 epochs, a batch size of 8, and gradient clipping at 1.0 epochs.
 
-\subsection{Evaluation Metrics}
-
-\paragraph{Text--audio alignment.} Mean cosine similarity between the CLAP text
-embedding of each genre name and the mean audio embedding of its tracks
-(computed on FMA Small). Measures how well text labels match the audio cluster centroid.
-
-\paragraph{Intra-genre cohesion.} Mean \emph{pairwise} cosine similarity among all
-audio embeddings within a genre:
-\[
-    C_g = \frac{1}{n_g(n_g-1)}\sum_{i \neq j} \mathbf{a}_i^\top \mathbf{a}_j
-\]
-A higher $C_g$ means tracks of the same genre are closer together in embedding space —
-a direct measure of how well the audio encoder clusters by genre.
-This metric is independent of the text encoder in Phase~1 but \emph{changes} in
-Phase~2 since the audio encoder is updated.
 
 \subsection{\texorpdfstring{CLIP$\to$CLAP}{CLIP-to-CLAP} Bridge MLP}
 \label{sec:bridge}
 
-A two-hidden-layer MLP maps 1024-dim CLIP image features to 512-dim CLAP embeddings
-($1024\to1024\to1024\to512$, ReLU + LayerNorm + Dropout$_{0.2}$). Trained with
-one-directional InfoNCE ($\tau=0.07$) on 20,000 MS COCO pairs; AdamW
-$lr=2\times10^{-4}$, batch 64, 5 epochs.
+To enable image-conditioned playlist generation without using a VLM to convert the image input into a textual description, we implement a cross-modal bridge designed to align visual embeddings with those from the audio and text encoders from CLAP. This module acts as a translator, mapping the 1024-dimensional image embeddings produced by a frozen CLIP ViT-L/14 encoder onto the 512-dimensional space of the CLAP model.
+
+The bridge is structured as a Multi-Layer Perceptron (MLP) with two hidden layers ($1024 \to 1024 \to 1024 \to 512$) and ReLU activation function, Layer Normalization, and a dropout rate of $0.2$.
+
+We train this MLP using a one-directional InfoNCE loss ($\tau=0.07$) on a dataset of 20,000 image--caption pairs from MS COCO. During the training procedure, both the CLIP visual encoder and the CLAP text encoder are kept frozen; the MLP learns to minimize the distance between the projected image embedding and the corresponding CLAP text embedding. The model is optimized using AdamW with a learning rate of $2 \times 10^{-4}$ and a batch size of 64 over 5 epochs.
+
+
+\subsection{Evaluation Metrics}
+
+To quantify the impact of our two-phase fine-tuning strategy, we employ two complementary metrics. The first evaluates the semantic bridge between modalities (Phase 1), while the second assesses the structural density of the audio latent space itself (Phase 2).
+
+\paragraph{Text--audio alignment.} This metric measures the success of the semantic adaptation performed in Phase 1. It is defined as the mean cosine similarity between the CLAP text embedding of a genre name (e.g., "Electronic") and the centroid of the audio embeddings for all tracks belonging to that genre within the FMA Small dataset. This alignment score measures how effectively the text encoder retrieves the relevant audio clusters in the shared latent space.
+
+\paragraph{Intra-genre cohesion.} This metric assesses the refinement of the audio manifold during Phase 2. It is calculated as the mean \emph{pairwise} cosine similarity among all audio embeddings within a specific genre:
+\[
+    C_g = \frac{1}{n_g(n_g-1)}\sum_{i \neq j} \mathbf{a}_i^\top \mathbf{a}_j
+\]
+A higher $C_g$ means tracks of the same genre are more tightly clustered together in the embedding space, measuring directly how discriminative and specialized the audio representations are.
+This metric is unaffected by the text-only updates of Phase 1, but serves as the primary indicator of the audio encoder’s specialization in Phase 2.
+
+
+\subsection{Visual Synthesis}
+\label{sec:visual_gen}
+
+To complement the semantic retrieval of audio tracks and offer a complete user experience, we add a generative vision component designed to produce context-aware playlist covers (when the input is not already an image).  We utilize the \texttt{segmind/small-sd} model, a distilled version of Stable Diffusion. This distilled model enables computational efficiency and low inference time, while maintaining high-fidelity synthesis.
+
+The generation is conditioned by the textual input used for the initial audio retrieval, which we encapuslate into a specific prompt for the generated images to resemble playlist covers :
+\textit{"Album cover art for a music playlist: [prompt], vibrant colors, artistic, detailed, professional album artwork, 4k."}, while a negative prompt is also given to produce more satisfying results : \textit{"text, watermark, blurry, low quality, distorted"}.
+
+The synthesis process is configured with 30 inference steps and a guidance scale of 7.5, to achieve a balance between adherence to the prompt and artistic creativity. The resulting image is created in 512$\times$512 resolution.
+
 
 % ─────────────────────────────────────────────────────────────────────────────
 \section{Experiments and Results}
