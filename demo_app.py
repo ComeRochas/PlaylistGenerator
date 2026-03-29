@@ -292,7 +292,7 @@ def build_app() -> gr.Blocks:
             with gr.Column(scale=7):
                 tracks_md = gr.Markdown(label="Résultats")
                 tracks_files = gr.Files(label="Morceaux (téléchargeables)")
-                cover_preview = gr.Image(label="Cover générée (mode texte)", type="pil", show_download_button=True)
+                cover_preview = gr.Image(label="Cover générée (mode texte)", type="pil")
 
         run_btn.click(
             fn=run_demo,
